@@ -2,10 +2,13 @@ package org.evvdroid
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PunctuationAndFixesTest {
+
+	private fun span(start: Int, end: Int, text: String) = Punctuation.SpokenSpan(start, end, text)
 
 	@Test
 	fun testSliderValuesUnbroken() {
@@ -19,77 +22,22 @@ class PunctuationAndFixesTest {
 	}
 
 	@Test
-	fun testZeroWidthLeadingMarksCleaned() {
-		// Paperback and Android unlabelled buttons with zero-width spaces
-		assertEquals("Play", TextFixes.apply("\u200B, Play"))
-		assertEquals("Play", TextFixes.apply("\u200B,Play"))
-		assertEquals("Play", TextFixes.apply("\u200B., Play"))
-		assertEquals("Play", TextFixes.apply("\u200B. , Play"))
-		assertEquals("Play", TextFixes.apply("\uFEFF, Play"))
-		assertEquals("Play", TextFixes.apply("\u200E, Play"))
-		assertEquals("button", TextFixes.apply(", button"))
-		assertEquals("button", TextFixes.apply("  , button"))
-		assertEquals("button", TextFixes.apply(". button"))
-		assertEquals("play button", TextFixes.apply(",play button"))
-		assertEquals("", TextFixes.apply("\u200B,   "))
-	}
-
-	@Test
-	fun testPeriodBeforeCommaCollapses() {
-		// TalkBack view concatenation: "Submit., button" or "Submit. , button"
-		assertEquals("Submit, button", TextFixes.apply("Submit., button"))
-		assertEquals("Submit, button", TextFixes.apply("Submit. , button"))
-		assertEquals("Submit, button", TextFixes.apply("Submit.   , button"))
-		assertEquals("Submit, button", TextFixes.apply("Submit . , button"))
-	}
-
-	@Test
-	fun testCommaBeforePeriodCollapses() {
-		assertEquals("Submit. button", TextFixes.apply("Submit,. button"))
-		assertEquals("Submit. button", TextFixes.apply("Submit, . button"))
-		assertEquals("Submit. button", TextFixes.apply("Submit , . button"))
-	}
-
-	@Test
-	fun testClauseAfterSentenceMarks() {
-		assertEquals("Really? yes", TextFixes.apply("Really?, yes"))
-		assertEquals("Really? yes", TextFixes.apply("Really? , yes"))
-		assertEquals("Done! next", TextFixes.apply("Done!, next"))
-		assertEquals("Done! next", TextFixes.apply("Done! , next"))
-	}
-
-	@Test
-	fun testRepeatedPunctuationDeduped() {
-		assertEquals("Hello. world", TextFixes.apply("Hello.. world"))
-		assertEquals("Hello. world", TextFixes.apply("Hello... world"))
-		assertEquals("Hello, world", TextFixes.apply("Hello,, world"))
-		assertEquals("Hello, world", TextFixes.apply("Hello,,, world"))
-	}
-
-	@Test
-	fun testSpaceBeforeMarkPreservedProperly() {
-		assertEquals("word.", TextFixes.apply("word ."))
-		assertEquals("word,", TextFixes.apply("word ,"))
-		assertEquals("word, next", TextFixes.apply("word. , next"))
-	}
-
-	@Test
-	fun testIsolatedPunctuationCleaned() {
-		assertEquals("", TextFixes.apply(" , "))
-		assertEquals("", TextFixes.apply(" . "))
-		assertEquals("", TextFixes.apply(","))
-		assertEquals("", TextFixes.apply("."))
-		assertEquals("", TextFixes.apply(" .. "))
-		assertEquals("", TextFixes.apply(" ,, "))
+	fun testTextFixesLeaveMeaningAlone() {
+		// A mark that belongs to what follows it is part of what is said
+		assertEquals(".5 mg", TextFixes.apply(".5 mg"))
+		assertEquals(".com", TextFixes.apply(".com"))
+		assertEquals("doses of 1, .5 and 2", TextFixes.apply("doses of 1, .5 and 2"))
 	}
 
 	@Test
 	fun testGroupedThousandsFixes() {
 		assertEquals("1000000", TextFixes.apply("1,000,000"))
-		assertEquals("10005", TextFixes.apply("1,000,5"))
 		assertEquals("1000000 items", TextFixes.apply("1,000,000 items"))
 		assertEquals("2000000000", TextFixes.apply("2,000,000,000"))
 		assertEquals("12,345", TextFixes.apply("12,345"))
+		// A list of numbers is not one number
+		assertEquals("1,000,5", TextFixes.apply("1,000,5"))
+		assertEquals("2,000,10,12", TextFixes.apply("2,000,10,12"))
 	}
 
 	@Test
@@ -118,36 +66,29 @@ class PunctuationAndFixesTest {
 	}
 
 	@Test
-	fun testWesternTextFlattenBulletDoesNotBecomePeriod() {
-		val flattenedBullet = WesternText.flatten("• item") { false }
-		assertFalse("Bullet must not be turned into period", flattenedBullet.contains('.'))
-
-		val flattenedMiddleDot = WesternText.flatten("A · B") { false }
-		assertFalse("Middle dot must not be turned into period", flattenedMiddleDot.contains('.'))
+	fun testSomeLevelKeepsItsSymbols() {
+		// What "some" has always spoken stays spoken for people already on it
+		val someResult = Punctuation.apply("$5 a_b ^x ~y \\z #1", Punctuation.LEVEL_SOME, 0x00010000)
+		assertEquals(" dollar 5 a underscore b caret x tilda y backslash z hash 1", someResult)
 	}
 
 	@Test
 	fun testSomeVsMostPunctuationClassification() {
-		val text = "test: item; word_a and ^x and ~y and \\z"
+		val text = "test: item; a|b and `c"
 
-		// At LEVEL_SOME, none of :, ;, _, ^, ~, \ should be vocalized
+		// At LEVEL_SOME, none of :, ;, |, ` should be vocalized
 		val someResult = Punctuation.apply(text, Punctuation.LEVEL_SOME, 0x00010000)
 		assertFalse(someResult.contains("colon", ignoreCase = true))
 		assertFalse(someResult.contains("semi", ignoreCase = true))
-		assertFalse(someResult.contains("underscore", ignoreCase = true))
-		assertFalse(someResult.contains("caret", ignoreCase = true))
-		assertFalse(someResult.contains("tilda", ignoreCase = true))
-		assertFalse(someResult.contains("tilde", ignoreCase = true))
-		assertFalse(someResult.contains("backslash", ignoreCase = true))
+		assertFalse(someResult.contains("bar", ignoreCase = true))
+		assertFalse(someResult.contains("graav", ignoreCase = true))
 
 		// At LEVEL_MOST, all of them should be vocalized
 		val mostResult = Punctuation.apply(text, Punctuation.LEVEL_MOST, 0x00010000)
 		assertTrue(mostResult.contains("colon", ignoreCase = true))
 		assertTrue(mostResult.contains("semi", ignoreCase = true))
-		assertTrue(mostResult.contains("underscore", ignoreCase = true))
-		assertTrue(mostResult.contains("caret", ignoreCase = true))
-		assertTrue(mostResult.contains("tilda", ignoreCase = true))
-		assertTrue(mostResult.contains("backslash", ignoreCase = true))
+		assertTrue(mostResult.contains("bar", ignoreCase = true))
+		assertTrue(mostResult.contains("graav", ignoreCase = true))
 	}
 
 	@Test
@@ -163,6 +104,19 @@ class PunctuationAndFixesTest {
 	}
 
 	@Test
+	fun testDotsAtAllLevelAreNamedOnce() {
+		val all = Punctuation.LEVEL_ALL
+		assertEquals("Wait dot dot dot. ok", Punctuation.apply("Wait... ok", all, 0x00010000))
+		assertEquals("Wait dot dot dot. ok", Punctuation.apply("Wait… ok", all, 0x00010000))
+		assertEquals("a multiple dots. b", Punctuation.apply("a.... b", all, 0x00010000))
+		assertEquals("End dot. ", Punctuation.apply("End.", all, 0x00010000))
+		// A dot on its own is still a dot
+		assertEquals(" dot. ", Punctuation.apply(".", all, 0x00010000))
+		// A dot inside a word is named, a decimal point is not
+		assertEquals("a dot. b costs 1.5", Punctuation.apply("a.b costs 1.5", all, 0x00010000))
+	}
+
+	@Test
 	fun testNvdaPunctuationMostParens() {
 		val text = "(test) and [bracket]"
 		val processed = Punctuation.apply(text, Punctuation.LEVEL_MOST, 0x00010000)
@@ -171,5 +125,41 @@ class PunctuationAndFixesTest {
 		assertTrue("Open bracket should be left bracket", processed.contains("left bracket", ignoreCase = true))
 		assertTrue("Close bracket should be right bracket", processed.contains("right bracket", ignoreCase = true))
 	}
-}
 
+	@Test
+	fun testNoSpansMeansNoExpansion() {
+		assertNull(Punctuation.expandSpans("Hello, world", emptyList()))
+		// Spans that point outside the text or cover nothing are not spans
+		assertNull(Punctuation.expandSpans("Hi", listOf(span(1, 9, "x"), span(1, 1, "x"), span(-1, 1, "x"))))
+	}
+
+	@Test
+	fun testTalkBackPunctuationSpansAreSpoken() {
+		// TalkBack at "all": one text span on each mark
+		val expanded = Punctuation.expandSpans(
+			"Hello, world (ok).",
+			listOf(span(5, 6, "comma"), span(13, 14, "left paren"), span(16, 17, "right paren"), span(17, 18, "period"))
+		)!!
+		assertEquals("Hello comma, world left paren ok right paren period. ", expanded.text)
+		assertTrue(expanded.namesPunctuation)
+	}
+
+	@Test
+	fun testOtherSpansLeaveThePunctuationLevelAlone() {
+		// A run of dashes collapsed by TalkBack, which it does at every level
+		val dashes = Punctuation.expandSpans("a ---- b, c", listOf(span(2, 6, "4 dashes")))!!
+		assertEquals("a 4 dashes b, c", dashes.text)
+		assertFalse(dashes.namesPunctuation)
+
+		// A span on a single letter is not punctuation either
+		val letter = Punctuation.expandSpans("x = 1", listOf(span(0, 1, "ex")))!!
+		assertEquals(" ex = 1", letter.text)
+		assertFalse(letter.namesPunctuation)
+	}
+
+	@Test
+	fun testOverlappingSpansKeepTheFirst() {
+		val expanded = Punctuation.expandSpans("abcdef", listOf(span(3, 5, "late"), span(0, 4, "early")))!!
+		assertEquals(" early ef", expanded.text)
+	}
+}

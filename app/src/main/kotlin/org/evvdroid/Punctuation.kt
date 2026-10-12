@@ -8,11 +8,11 @@ import android.text.style.TtsSpan
  *
  * Supports 4 verbosity levels matching NVDA:
  * - LEVEL_NONE (0): Punctuation symbols are not spoken (they only provide standard pauses).
- * - LEVEL_SOME (1): Essential symbols are spoken (#, %, &, *, +, =, /, <, >, @, •).
+ * - LEVEL_SOME (1): Essential symbols are spoken (@, #, $, %, &, *, +, =, /, \, _, ^, <, >, ~, •).
  * - LEVEL_MOST (2): Level SOME plus brackets, braces, quotes, dashes, phrase punctuation (: ;),
- *                   and code symbols (_, ^, ~, \, |, `).
+ *                   bar (|) and grave (`).
  * - LEVEL_ALL  (3): Every punctuation mark is spoken, including sentence punctuation (. , ? !),
- *                   ticks ('), currency ($), and ellipses (...).
+ *                   ticks (') and ellipses (...).
  */
 object Punctuation {
 
@@ -21,46 +21,59 @@ object Punctuation {
 	const val LEVEL_MOST = 2
 	const val LEVEL_ALL = 3
 
+	/** A stretch of the text that whoever sent it has already put into words. */
+	data class SpokenSpan(val start: Int, val end: Int, val text: String)
+
 	/**
-	 * Expands any TtsSpan objects (such as those attached by TalkBack's punctuation reading control)
-	 * into their spoken text equivalents. Returns null if no relevant TtsSpans are present.
+	 * Text with its spans spoken out. [namesPunctuation] is set when one of
+	 * them stood on a single punctuation mark, which is how TalkBack names
+	 * punctuation at its own "most" and "all" levels.
 	 */
-	fun expandTtsSpans(charSequence: CharSequence?): String? {
-		if (charSequence == null || charSequence !is Spanned) return null
+	data class Expanded(val text: String, val namesPunctuation: Boolean)
+
+	/**
+	 * [charSequence] with its text spans replaced by what they say, or null if
+	 * it has none. Only [TtsSpan.TYPE_TEXT] is a replacement; a verbatim span
+	 * asks for its text to be spelled, and the others carry no text at all.
+	 */
+	fun expandTtsSpans(charSequence: CharSequence?): Expanded? {
+		if (charSequence !is Spanned) return null
 		val spans = charSequence.getSpans(0, charSequence.length, TtsSpan::class.java)
 		if (spans.isNullOrEmpty()) return null
-
-		val spanList = spans.mapNotNull { span ->
+		val spoken = spans.mapNotNull { span ->
+			if (span.type != TtsSpan.TYPE_TEXT) return@mapNotNull null
 			val text = span.args?.getString(TtsSpan.ARG_TEXT)
-				?: span.args?.getString(TtsSpan.ARG_VERBATIM)
-			if (!text.isNullOrEmpty()) {
-				val start = charSequence.getSpanStart(span)
-				val end = charSequence.getSpanEnd(span)
-				if (start in 0..end && end <= charSequence.length) {
-					Triple(start, end, text)
-				} else null
-			} else null
-		}.sortedBy { it.first }
+			if (text.isNullOrEmpty()) null
+			else SpokenSpan(charSequence.getSpanStart(span), charSequence.getSpanEnd(span), text)
+		}
+		return expandSpans(charSequence, spoken)
+	}
 
-		if (spanList.isEmpty()) return null
+	/** The part of [expandTtsSpans] that needs nothing from Android. */
+	fun expandSpans(text: CharSequence, spans: List<SpokenSpan>): Expanded? {
+		val usable = spans
+			.filter { it.start >= 0 && it.start < it.end && it.end <= text.length && it.text.isNotEmpty() }
+			.sortedBy { it.start }
+		if (usable.isEmpty()) return null
 
 		val sb = StringBuilder()
 		var cursor = 0
-		for ((start, end, replacement) in spanList) {
-			if (start < cursor) continue
-			sb.append(charSequence.subSequence(cursor, start))
-			val original = charSequence.subSequence(start, end).toString()
-			if (original.length == 1 && original[0] in ".,:;?!") {
-				sb.append(" ").append(replacement).append(original[0]).append(" ")
-			} else {
-				sb.append(" ").append(replacement).append(" ")
+		var namesPunctuation = false
+		for (span in usable) {
+			if (span.start < cursor) continue
+			sb.append(text, cursor, span.start)
+			val single = if (span.end - span.start == 1) text[span.start] else null
+			if (single != null && !single.isLetterOrDigit() && !single.isWhitespace()) {
+				namesPunctuation = true
 			}
-			cursor = end
+			sb.append(' ').append(span.text)
+			// The mark stays behind its name so the engine still pauses on it.
+			if (single != null && single in ".,:;?!") sb.append(single)
+			sb.append(' ')
+			cursor = span.end
 		}
-		if (cursor < charSequence.length) {
-			sb.append(charSequence.subSequence(cursor, charSequence.length))
-		}
-		return collapseSpaces(sb.toString())
+		sb.append(text, cursor, text.length)
+		return Expanded(collapseSpaces(sb.toString()), namesPunctuation)
 	}
 
 	fun apply(text: String, level: Int, language: Int? = null): String {
@@ -88,7 +101,7 @@ object Punctuation {
 				val name = map[ch] ?: continue
 				out = when (ch) {
 					// Phrase endings preserve punctuation mark to retain cadence pause in Eloquence
-					':' -> out.replace(Regex(""":(?!\d)"""), " $name: ")
+					':' -> COLON.replace(out, Regex.escapeReplacement(" $name: "))
 					';' -> out.replace(";", " $name; ")
 					else -> out.replace(ch.toString(), " $name ")
 				}
@@ -99,19 +112,25 @@ object Punctuation {
 			return collapseSpaces(out)
 		}
 
-		// 3. Process LEVEL_ALL symbols (sentence & clause punctuation, currency, ticks, ellipses)
-		// Ellipses and multiple dots first
+		// 3. Process LEVEL_ALL symbols (sentence & clause punctuation, ticks, ellipses)
+		// Every dot goes in one pass, so an ellipsis is named once and the dot
+		// left behind it for the pause is not then named again.
+		val dotName = map['.'] ?: "dot"
 		val ellipsisName = map['…'] ?: "dot dot dot"
-		out = out.replace(Regex("""\.{4,}"""), " multiple dots. ")
-		out = out.replace(Regex("""\.{3}|…"""), " $ellipsisName. ")
+		out = DOTS.replace(out) {
+			when {
+				it.value.length > 3 -> " multiple dots. "
+				it.value.length == 3 || it.value == "…" -> " $ellipsisName. "
+				else -> " $dotName. "
+			}
+		}
 
 		for (ch in ALL_SYMBOLS) {
 			if (out.indexOf(ch) >= 0) {
 				val name = map[ch] ?: continue
 				// Preserved marks keep punctuation mark for Eloquence cadence and pitch inflections
 				out = when (ch) {
-					'.' -> out.replace(Regex("""(?<=[^\s.])\.(?=[\"'”’)\s]|$)"""), " $name. ")
-					',' -> out.replace(Regex(""",(?!\d)"""), " $name, ")
+					',' -> COMMA.replace(out, Regex.escapeReplacement(" $name, "))
 					'?' -> out.replace("?", " $name? ")
 					'!' -> out.replace("!", " $name! ")
 					else -> out.replace(ch.toString(), " $name ")
@@ -123,19 +142,30 @@ object Punctuation {
 	}
 
 	private fun collapseSpaces(text: String): String =
-		text.replace(Regex("""[ \t]+"""), " ")
+		SPACES.replace(text, " ")
+
+	private val SPACES = Regex("""[ \t]+""")
+
+	/** A colon, but not the one inside a time. */
+	private val COLON = Regex(""":(?!\d)""")
+
+	/** A comma, but not the one grouping a number. */
+	private val COMMA = Regex(""",(?!\d)""")
+
+	/** An ellipsis, a longer run of dots, or one dot that is not a decimal point. */
+	private val DOTS = Regex("""\.{3,}|…|(?<!\d)\.(?!\d)""")
 
 	private val SOME_SYMBOLS = charArrayOf(
-		'#', '%', '&', '*', '+', '=', '/', '<', '>', '@', '•'
+		'@', '#', '$', '%', '&', '*', '+', '=', '/', '\\', '_', '^', '<', '>', '~', '•'
 	)
 
 	private val MOST_SYMBOLS = charArrayOf(
-		'"', '(', ')', '[', ']', '{', '}', '_', '^', '~', '\\', '|', '`',
+		'"', '(', ')', '[', ']', '{', '}', '|', '`',
 		'-', '—', '–', '“', '”', '‘', '’', '·', ':', ';'
 	)
 
 	private val ALL_SYMBOLS = charArrayOf(
-		'.', ',', '?', '!', '\'', '$'
+		',', '?', '!', '\''
 	)
 
 	private fun getSymbolMap(langCode: String): Map<Char, String> = when (langCode) {
@@ -150,7 +180,7 @@ object Punctuation {
 	/** NVDA English symbol dictionary, including user custom overrides for parens and underscore. */
 	private val ENGLISH_MAP: Map<Char, String> = mapOf(
 		'@' to "at",
-		'#' to "number",
+		'#' to "hash",
 		'$' to "dollar",
 		'%' to "percent",
 		'&' to "and",

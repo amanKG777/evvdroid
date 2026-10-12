@@ -220,15 +220,15 @@ class EvvTtsService : TextToSpeechService() {
 		target.setRatePercent(request.speechRate)
 		target.setPitchPercent(request.pitch)
 		val charSeq = request.charSequenceText
-		val talkBackExpanded = Punctuation.expandTtsSpans(charSeq)
-		val rawText = talkBackExpanded ?: charSeq?.toString().orEmpty()
+		val expanded = Punctuation.expandTtsSpans(charSeq)
+		val rawText = expanded?.text ?: charSeq?.toString().orEmpty()
 		if (rawText.isEmpty()) {
 			callback.start(target.sampleRateHz, AudioFormat.ENCODING_PCM_16BIT, 1)
 			callback.done()
 			return
 		}
 
-		var processedText = rawText.replace(TextFixes.ZERO_WIDTH, "")
+		var processedText = rawText
 		val cs = activeCaseSensitiveEntries
 		if (cs.isNotEmpty()) {
 			processedText = Dictionaries.applyCaseSensitiveDict(processedText, cs)
@@ -251,44 +251,14 @@ class EvvTtsService : TextToSpeechService() {
 				readRomanNumerals = s.readRomanNumerals
 			)
 		}
-		if (talkBackExpanded == null) {
-			val paramLevel = request.params?.let { bundle ->
-				when {
-					bundle.containsKey("punctuation_level") -> bundle.getInt("punctuation_level")
-					bundle.containsKey("punctuation") -> {
-						val str = bundle.getString("punctuation")
-						when (str?.lowercase()) {
-							"none" -> Punctuation.LEVEL_NONE
-							"some" -> Punctuation.LEVEL_SOME
-							"most" -> Punctuation.LEVEL_MOST
-							"all" -> Punctuation.LEVEL_ALL
-							else -> bundle.getInt("punctuation", -1).takeIf { it in 0..3 }
-						}
-					}
-					bundle.containsKey("speak_punctuation") -> {
-						val str = bundle.getString("speak_punctuation")
-						when (str?.lowercase()) {
-							"none" -> Punctuation.LEVEL_NONE
-							"some" -> Punctuation.LEVEL_SOME
-							"most" -> Punctuation.LEVEL_MOST
-							"all" -> Punctuation.LEVEL_ALL
-							"true" -> Punctuation.LEVEL_ALL
-							"false" -> Punctuation.LEVEL_NONE
-							else -> {
-								val intVal = bundle.getInt("speak_punctuation", -1)
-								if (intVal in 0..3) intVal
-								else if (bundle.getBoolean("speak_punctuation", false)) Punctuation.LEVEL_ALL
-								else null
-							}
-						}
-					}
-					else -> null
-				}
-			}
-			val punctLevel = paramLevel ?: s?.punctuationLevel ?: Punctuation.LEVEL_SOME
-			if (s?.readPunctuation != false && punctLevel > Punctuation.LEVEL_NONE) {
-				processedText = Punctuation.apply(processedText, punctLevel, target.language)
-			}
+		val punctLevel = s?.punctuationLevel ?: Punctuation.LEVEL_SOME
+		// A screen reader that has named the punctuation itself is not named
+		// over. Its other spans, a run of dashes or a picture's description,
+		// say nothing about punctuation and leave the user's level in charge.
+		if (expanded?.namesPunctuation != true &&
+			s?.readPunctuation != false && punctLevel > Punctuation.LEVEL_NONE
+		) {
+			processedText = Punctuation.apply(processedText, punctLevel, target.language)
 		}
 		val text = TextFixes.apply(processedText)
 		if (text.isEmpty()) {
