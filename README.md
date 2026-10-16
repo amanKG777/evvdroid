@@ -80,7 +80,9 @@ Ten languages make `libevvjni.so` about 45 MB, and a library is stored uncompres
 
 `-Pevvdroid.abis=arm64-v8a -Pevvdroid.rules=bytecode` is the fast loop for working on the Kotlin. Compiled rules are the default because interrupting and restarting costs about a third of what it costs interpreted, and a screen reader interrupts constantly.
 
-A fix to openevv that upstream has not taken yet goes in `native/patches` and is applied at build time. There are none, so the submodule builds as upstream left it.
+A fix to openevv that upstream has not taken yet goes in `native/patches` and is applied at build time. There is one:
+
+* `0001-compare-tokens-by-byte-difference.patch`. The engine keeps only the low byte of what `memcmp` answers. Android's `memcmp` on x86_64 answers a difference in the fourth byte as a multiple of 4096, whose low byte is nought, so different tokens compare equal. The tokeniser then never finishes reading the engine's own setup string and no instance is ever made: on an x86_64 emulator the engine is bound but never speaks. The patch compares byte by byte, which is what glibc answers and what the engine's baselines were recorded against.
 
 ## Settings
 
