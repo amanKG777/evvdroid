@@ -221,8 +221,7 @@ class EvvTtsService : TextToSpeechService() {
 		target.setRatePercent(request.speechRate)
 		target.setPitchPercent(request.pitch)
 		val charSeq = request.charSequenceText
-		val expanded = Punctuation.expandTtsSpans(charSeq)
-		val rawText = expanded?.text ?: charSeq?.toString().orEmpty()
+		val rawText = Punctuation.expandTtsSpans(charSeq) ?: charSeq?.toString().orEmpty()
 		if (rawText.isEmpty()) {
 			callback.start(target.sampleRateHz, AudioFormat.ENCODING_PCM_16BIT, 1)
 			callback.done()
@@ -252,15 +251,15 @@ class EvvTtsService : TextToSpeechService() {
 				readRomanNumerals = s.readRomanNumerals
 			)
 		}
-		val punctLevel = s?.punctuationLevel ?: Punctuation.LEVEL_SOME
-		// A screen reader that has named the punctuation itself is not named
-		// over. Its other spans, a run of dashes or a picture's description,
-		// say nothing about punctuation and leave the user's level in charge.
-		if (expanded?.namesPunctuation != true &&
-			s?.readPunctuation != false && punctLevel > Punctuation.LEVEL_NONE
-		) {
-			processedText = Punctuation.apply(processedText, punctLevel, target.language)
+		// Run at every level, even none: marks a screen reader has already
+		// named are flagged so they are not named twice, and only this takes
+		// the flag back out.
+		val punctLevel = if (s?.readPunctuation != false) {
+			s?.punctuationLevel ?: Punctuation.LEVEL_SOME
+		} else {
+			Punctuation.LEVEL_NONE
 		}
+		processedText = Punctuation.apply(processedText, punctLevel, target.language)
 		val text = TextFixes.apply(processedText)
 		if (text.isEmpty()) {
 			callback.start(target.sampleRateHz, AudioFormat.ENCODING_PCM_16BIT, 1)

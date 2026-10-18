@@ -13,6 +13,10 @@ import android.text.style.TtsSpan
  *                   bar (|) and grave (`).
  * - LEVEL_ALL  (3): Every punctuation mark is spoken, including sentence punctuation (. , ? !),
  *                   ticks (') and ellipses (...).
+ *
+ * Every mark is named in one pass over the text, so a name is never itself
+ * read for marks: French names "?" "point d'interrogation", and a later pass
+ * for "'" would name the apostrophe inside it.
  */
 object Punctuation {
 
@@ -25,18 +29,18 @@ object Punctuation {
 	data class SpokenSpan(val start: Int, val end: Int, val text: String)
 
 	/**
-	 * Text with its spans spoken out. [namesPunctuation] is set when one of
-	 * them stood on a single punctuation mark, which is how TalkBack names
-	 * punctuation at its own "most" and "all" levels.
+	 * Stands in front of a mark kept behind a name someone else has already
+	 * said, so that [apply] lets it be and does not name it a second time. It
+	 * never reaches the engine: [apply] takes it out at every level.
 	 */
-	data class Expanded(val text: String, val namesPunctuation: Boolean)
+	const val NAMED = '\uE000'
 
 	/**
 	 * [charSequence] with its text spans replaced by what they say, or null if
 	 * it has none. Only [TtsSpan.TYPE_TEXT] is a replacement; a verbatim span
 	 * asks for its text to be spelled, and the others carry no text at all.
 	 */
-	fun expandTtsSpans(charSequence: CharSequence?): Expanded? {
+	fun expandTtsSpans(charSequence: CharSequence?): String? {
 		if (charSequence !is Spanned) return null
 		val spans = charSequence.getSpans(0, charSequence.length, TtsSpan::class.java)
 		if (spans.isNullOrEmpty()) return null
@@ -49,8 +53,12 @@ object Punctuation {
 		return expandSpans(charSequence, spoken)
 	}
 
-	/** The part of [expandTtsSpans] that needs nothing from Android. */
-	fun expandSpans(text: CharSequence, spans: List<SpokenSpan>): Expanded? {
+	/**
+	 * The part of [expandTtsSpans] that needs nothing from Android. TalkBack
+	 * names punctuation at its own "most" and "all" by putting a text span on
+	 * each mark; the user's level still holds for every mark it left alone.
+	 */
+	fun expandSpans(text: CharSequence, spans: List<SpokenSpan>): String? {
 		val usable = spans
 			.filter { it.start >= 0 && it.start < it.end && it.end <= text.length && it.text.isNotEmpty() }
 			.sortedBy { it.start }
@@ -58,115 +66,88 @@ object Punctuation {
 
 		val sb = StringBuilder()
 		var cursor = 0
-		var namesPunctuation = false
 		for (span in usable) {
 			if (span.start < cursor) continue
 			sb.append(text, cursor, span.start)
 			val single = if (span.end - span.start == 1) text[span.start] else null
-			if (single != null && !single.isLetterOrDigit() && !single.isWhitespace()) {
-				namesPunctuation = true
-			}
 			sb.append(' ').append(span.text)
 			// The mark stays behind its name so the engine still pauses on it.
-			if (single != null && single in ".,:;?!") sb.append(single)
+			if (single != null && single in KEPT) sb.append(NAMED).append(single)
 			sb.append(' ')
 			cursor = span.end
 		}
 		sb.append(text, cursor, text.length)
-		return Expanded(collapseSpaces(sb.toString()), namesPunctuation)
+		return collapseSpaces(sb.toString())
 	}
 
 	fun apply(text: String, level: Int, language: Int? = null): String {
-		if (text.isEmpty() || level <= LEVEL_NONE) return text
+		if (text.isEmpty()) return text
+		if (level <= LEVEL_NONE) return text.unmarked()
 		val langCode = language?.let { Eci.localeOf(it)?.first } ?: "eng"
 		val map = getSymbolMap(langCode)
 
-		var out = text
-
-		// 1. Process LEVEL_SOME symbols
-		for (ch in SOME_SYMBOLS) {
-			if (out.indexOf(ch) >= 0) {
-				val name = map[ch] ?: continue
-				out = out.replace(ch.toString(), " $name ")
+		val out = MARKS.getValue(level.coerceAtMost(LEVEL_ALL)).replace(text) {
+			val mark = it.value
+			val ellipsis = mark.length > 1 || mark == "…"
+			val name = map[if (ellipsis) '…' else mark[0]] ?: return@replace mark
+			// Phrase and sentence marks stay behind their names, so Eloquence
+			// still pauses and inflects on them.
+			val kept = when {
+				ellipsis -> "."
+				mark[0] in KEPT -> mark
+				else -> ""
 			}
+			" $name$kept "
 		}
-
-		if (level < LEVEL_MOST) {
-			return collapseSpaces(out)
-		}
-
-		// 2. Process LEVEL_MOST symbols
-		for (ch in MOST_SYMBOLS) {
-			if (out.indexOf(ch) >= 0) {
-				val name = map[ch] ?: continue
-				out = when (ch) {
-					// Phrase endings preserve punctuation mark to retain cadence pause in Eloquence
-					':' -> COLON.replace(out, Regex.escapeReplacement(" $name: "))
-					';' -> out.replace(";", " $name; ")
-					else -> out.replace(ch.toString(), " $name ")
-				}
-			}
-		}
-
-		if (level < LEVEL_ALL) {
-			return collapseSpaces(out)
-		}
-
-		// 3. Process LEVEL_ALL symbols (sentence & clause punctuation, ticks, ellipses)
-		// Every dot goes in one pass, so an ellipsis is named once and the dot
-		// left behind it for the pause is not then named again.
-		val dotName = map['.'] ?: "dot"
-		val ellipsisName = map['…'] ?: "dot dot dot"
-		out = DOTS.replace(out) {
-			when {
-				it.value.length > 3 -> " multiple dots. "
-				it.value.length == 3 || it.value == "…" -> " $ellipsisName. "
-				else -> " $dotName. "
-			}
-		}
-
-		for (ch in ALL_SYMBOLS) {
-			if (out.indexOf(ch) >= 0) {
-				val name = map[ch] ?: continue
-				// Preserved marks keep punctuation mark for Eloquence cadence and pitch inflections
-				out = when (ch) {
-					',' -> COMMA.replace(out, Regex.escapeReplacement(" $name, "))
-					'?' -> out.replace("?", " $name? ")
-					'!' -> out.replace("!", " $name! ")
-					else -> out.replace(ch.toString(), " $name ")
-				}
-			}
-		}
-
-		return collapseSpaces(out)
+		return collapseSpaces(out).unmarked()
 	}
+
+	private fun String.unmarked(): String =
+		if (indexOf(NAMED) < 0) this else replace(NAMED.toString(), "")
 
 	private fun collapseSpaces(text: String): String =
 		SPACES.replace(text, " ")
 
 	private val SPACES = Regex("""[ \t]+""")
 
-	/** A colon, but not the one inside a time. */
-	private val COLON = Regex(""":(?!\d)""")
-
-	/** A comma, but not the one grouping a number. */
-	private val COMMA = Regex(""",(?!\d)""")
-
-	/** An ellipsis, a longer run of dots, or one dot that is not a decimal point. */
-	private val DOTS = Regex("""\.{3,}|…|(?<!\d)\.(?!\d)""")
+	/** Marks that keep their place behind their names. */
+	private const val KEPT = ".,:;?!"
 
 	private val SOME_SYMBOLS = charArrayOf(
 		'@', '#', '$', '%', '&', '*', '+', '=', '/', '\\', '_', '^', '<', '>', '~', '•'
 	)
 
+	/** With the colon, which is not one inside a time. */
 	private val MOST_SYMBOLS = charArrayOf(
 		'"', '(', ')', '[', ']', '{', '}', '|', '`',
-		'-', '—', '–', '“', '”', '‘', '’', '·', ':', ';'
+		'-', '—', '–', '“', '”', '‘', '’', '·', ';'
 	)
 
+	/** With the comma, which is not one grouping a number, and the dots. */
 	private val ALL_SYMBOLS = charArrayOf(
-		',', '?', '!', '\''
+		'?', '!', '\'', '¿', '¡'
 	)
+
+	/**
+	 * What each level names, as one pattern so that a mark is named once and a
+	 * name is never read for marks. A dot that is a decimal point and a comma
+	 * grouping a number are not punctuation; neither is a colon inside a time.
+	 * An ellipsis, or any longer run of dots, is one mark.
+	 */
+	private val MARKS: Map<Int, Regex> = (LEVEL_SOME..LEVEL_ALL).associateWith { level ->
+		val singles = StringBuilder().append(SOME_SYMBOLS)
+		val contextual = mutableListOf<String>()
+		if (level >= LEVEL_MOST) {
+			singles.append(MOST_SYMBOLS)
+			contextual += """:(?!\d)"""
+		}
+		if (level >= LEVEL_ALL) {
+			singles.append(ALL_SYMBOLS)
+			contextual += listOf("""\.{3,}|…|(?<!\d)\.(?!\d)""", """,(?!\d)""")
+		}
+		val set = singles.map { "\\u%04x".format(it.code) }.joinToString("", "[", "]")
+		Regex("""(?<!\uE000)(?:""" + (contextual + set).joinToString("|") + ")")
+	}
 
 	private fun getSymbolMap(langCode: String): Map<Char, String> = when (langCode) {
 		"spa" -> SPANISH_MAP
@@ -177,7 +158,7 @@ object Punctuation {
 		else -> ENGLISH_MAP
 	}
 
-	/** NVDA English symbol dictionary, including user custom overrides for parens and underscore. */
+	/** NVDA English symbol dictionary. */
 	private val ENGLISH_MAP: Map<Char, String> = mapOf(
 		'@' to "at",
 		'#' to "hash",
@@ -191,8 +172,8 @@ object Punctuation {
 		'<' to "less",
 		'>' to "greater",
 		'•' to "bullet",
-		'(' to "paren on",
-		')' to "paren off",
+		'(' to "left paren",
+		')' to "right paren",
 		'[' to "left bracket",
 		']' to "right bracket",
 		'{' to "left brace",
@@ -263,6 +244,8 @@ object Punctuation {
 		',' to "coma",
 		'?' to "cerrar interrogación",
 		'!' to "cerrar exclamación",
+		'¿' to "abrir interrogación",
+		'¡' to "abrir exclamación",
 		'\'' to "apóstrofo",
 		'…' to "elipsis"
 	)
@@ -384,7 +367,7 @@ object Punctuation {
 		'’' to "chiuso apostrofo",
 		'-' to "trattino",
 		'—' to "trattino lungo",
-		'–' to "Trattino corto",
+		'–' to "trattino corto",
 		':' to "due punti",
 		';' to "punto e virgola",
 		'_' to "sottolineato",

@@ -108,7 +108,9 @@ class PunctuationAndFixesTest {
 		val all = Punctuation.LEVEL_ALL
 		assertEquals("Wait dot dot dot. ok", Punctuation.apply("Wait... ok", all, 0x00010000))
 		assertEquals("Wait dot dot dot. ok", Punctuation.apply("Wait… ok", all, 0x00010000))
-		assertEquals("a multiple dots. b", Punctuation.apply("a.... b", all, 0x00010000))
+		assertEquals("a dot dot dot. b", Punctuation.apply("a.... b", all, 0x00010000))
+		// A longer run is an ellipsis in every language, not English words
+		assertEquals("Ok points de suspension. fin", Punctuation.apply("Ok.... fin", all, 0x00030000))
 		assertEquals("End dot. ", Punctuation.apply("End.", all, 0x00010000))
 		// A dot on its own is still a dot
 		assertEquals(" dot. ", Punctuation.apply(".", all, 0x00010000))
@@ -120,8 +122,8 @@ class PunctuationAndFixesTest {
 	fun testNvdaPunctuationMostParens() {
 		val text = "(test) and [bracket]"
 		val processed = Punctuation.apply(text, Punctuation.LEVEL_MOST, 0x00010000)
-		assertTrue("Open paren should be paren on", processed.contains("paren on", ignoreCase = true))
-		assertTrue("Close paren should be paren off", processed.contains("paren off", ignoreCase = true))
+		assertTrue("Open paren should be left paren", processed.contains("left paren", ignoreCase = true))
+		assertTrue("Close paren should be right paren", processed.contains("right paren", ignoreCase = true))
 		assertTrue("Open bracket should be left bracket", processed.contains("left bracket", ignoreCase = true))
 		assertTrue("Close bracket should be right bracket", processed.contains("right bracket", ignoreCase = true))
 	}
@@ -140,26 +142,65 @@ class PunctuationAndFixesTest {
 			"Hello, world (ok).",
 			listOf(span(5, 6, "comma"), span(13, 14, "left paren"), span(16, 17, "right paren"), span(17, 18, "period"))
 		)!!
-		assertEquals("Hello comma, world left paren ok right paren period. ", expanded.text)
-		assertTrue(expanded.namesPunctuation)
+		// Whatever the user's own level, each mark is named once
+		for (level in Punctuation.LEVEL_NONE..Punctuation.LEVEL_ALL) {
+			assertEquals(
+				"Hello comma, world left paren ok right paren period. ",
+				Punctuation.apply(expanded, level, 0x00010000)
+			)
+		}
+	}
+
+	@Test
+	fun testUserLevelStillNamesWhatTalkBackLeft() {
+		// TalkBack at "most" names the parens; evvdroid at "all" names the rest
+		val expanded = Punctuation.expandSpans(
+			"Hello (x), world.",
+			listOf(span(6, 7, "left paren"), span(8, 9, "right paren"))
+		)!!
+		assertEquals(
+			"Hello left paren x right paren comma, world dot. ",
+			Punctuation.apply(expanded, Punctuation.LEVEL_ALL, 0x00010000)
+		)
+		// A described symbol does not turn the user's level off either
+		val star = Punctuation.expandSpans("★ Rated 5, good.", listOf(span(0, 1, "star")))!!
+		assertEquals(" star Rated 5 comma, good dot. ", Punctuation.apply(star, Punctuation.LEVEL_ALL, 0x00010000))
 	}
 
 	@Test
 	fun testOtherSpansLeaveThePunctuationLevelAlone() {
 		// A run of dashes collapsed by TalkBack, which it does at every level
 		val dashes = Punctuation.expandSpans("a ---- b, c", listOf(span(2, 6, "4 dashes")))!!
-		assertEquals("a 4 dashes b, c", dashes.text)
-		assertFalse(dashes.namesPunctuation)
+		assertEquals("a 4 dashes b, c", dashes)
 
 		// A span on a single letter is not punctuation either
 		val letter = Punctuation.expandSpans("x = 1", listOf(span(0, 1, "ex")))!!
-		assertEquals(" ex = 1", letter.text)
-		assertFalse(letter.namesPunctuation)
+		assertEquals(" ex = 1", letter)
 	}
 
 	@Test
 	fun testOverlappingSpansKeepTheFirst() {
 		val expanded = Punctuation.expandSpans("abcdef", listOf(span(3, 5, "late"), span(0, 4, "early")))!!
-		assertEquals(" early ef", expanded.text)
+		assertEquals(" early ef", expanded)
+	}
+
+	@Test
+	fun testNamesAreNotReadForMarks() {
+		// French names carry an apostrophe, which "all" also names
+		assertEquals(
+			"Vraiment point d'interrogation? Oui point d'exclamation! ",
+			Punctuation.apply("Vraiment? Oui!", Punctuation.LEVEL_ALL, 0x00030000)
+		)
+		assertEquals("l apostrophe eau", Punctuation.apply("l'eau", Punctuation.LEVEL_ALL, 0x00030000))
+	}
+
+	@Test
+	fun testSpanishOpeningMarks() {
+		assertEquals(
+			" abrir interrogación Qué cerrar interrogación? ",
+			Punctuation.apply("¿Qué?", Punctuation.LEVEL_ALL, 0x00020000)
+		)
+		// Below "all" they are left for the engine, like their closing halves
+		assertEquals("¡Hola!", Punctuation.apply("¡Hola!", Punctuation.LEVEL_MOST, 0x00020000))
 	}
 }
