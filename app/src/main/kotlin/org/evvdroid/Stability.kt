@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings as SystemSettings
+import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.core.content.IntentCompat
 import androidx.core.net.toUri
 
@@ -37,6 +38,7 @@ object Stability {
 	/** Whether the phone has app hibernation at all. It arrived in Android 11
 	 *  as taking permissions away from unused apps, and grew into pausing them
 	 *  outright in 12. */
+	@get:ChecksSdkIntAtLeast(api = Build.VERSION_CODES.R)
 	val hasHibernation: Boolean
 		get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
@@ -92,6 +94,7 @@ object Stability {
 	)
 
 	/** Whether Android keeps the record [exits] reads. It began in 11. */
+	@get:ChecksSdkIntAtLeast(api = Build.VERSION_CODES.R)
 	val hasExitHistory: Boolean
 		get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
@@ -105,8 +108,13 @@ object Stability {
 	 * something in use for memory before everything idle has gone. A process
 	 * that was cached was doing nothing, and taking it back is ordinary: the
 	 * screen reader starts it again the next time it speaks. Ends that say
-	 * nothing about stability -- an update, a permission changing -- are left
-	 * out.
+	 * nothing about stability -- an update, a permission changing, another
+	 * user on the phone being stopped, the catch-all "other" that Android says
+	 * apps cannot act on -- are left out.
+	 *
+	 * Before 14, Android gave updating the app and changing its components the
+	 * same reason as Force stop, so only from 14 on is that reason counted as
+	 * the user's doing.
 	 */
 	fun exits(context: Context): Exits {
 		if (!hasExitHistory) return Exits()
@@ -114,6 +122,7 @@ object Stability {
 		val all = runCatching {
 			manager.getHistoricalProcessExitReasons(context.packageName, 0, 0)
 		}.getOrDefault(emptyList())
+		val forceStopIsDistinct = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
 
 		var crashed = 0
 		var unresponsive = 0
@@ -128,13 +137,14 @@ object Stability {
 				ApplicationExitInfo.REASON_CRASH_NATIVE,
 				ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> { crashed++; true }
 				ApplicationExitInfo.REASON_ANR -> { unresponsive++; true }
-				ApplicationExitInfo.REASON_USER_REQUESTED,
-				ApplicationExitInfo.REASON_USER_STOPPED -> { byUser++; true }
+				ApplicationExitInfo.REASON_USER_REQUESTED -> {
+					if (forceStopIsDistinct) byUser++
+					forceStopIsDistinct
+				}
 				ApplicationExitInfo.REASON_SIGNALED,
 				ApplicationExitInfo.REASON_LOW_MEMORY,
 				ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
-				ApplicationExitInfo.REASON_FREEZER,
-				ApplicationExitInfo.REASON_OTHER -> {
+				ApplicationExitInfo.REASON_FREEZER -> {
 					if (inUse) killedInUse++ else idle++
 					true
 				}

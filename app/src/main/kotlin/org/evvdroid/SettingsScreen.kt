@@ -275,8 +275,8 @@ fun SettingsScreen(state: SettingsModel) {
 private fun StabilityDialog(state: SettingsModel, onClose: () -> Unit) {
 	val context = LocalContext.current
 	val missing = stringResource(R.string.stability_autostart_missing)
-	val on = stringResource(R.string.stability_on)
-	val off = stringResource(R.string.stability_off)
+	val on = stringResource(R.string.switch_on)
+	val off = stringResource(R.string.switch_off)
 	var pinning by remember { mutableStateOf(false) }
 
 	AlertDialog(
@@ -316,7 +316,7 @@ private fun StabilityDialog(state: SettingsModel, onClose: () -> Unit) {
 		},
 		confirmButton = {
 			TextButton(onClick = onClose) {
-				Text(stringResource(R.string.close))
+				Text(stringResource(R.string.dictionary_close))
 			}
 		}
 	)
@@ -328,7 +328,7 @@ private fun StabilityDialog(state: SettingsModel, onClose: () -> Unit) {
 			text = { Text(stringResource(R.string.stability_pinning_help)) },
 			confirmButton = {
 				TextButton(onClick = { pinning = false }) {
-					Text(stringResource(R.string.close))
+					Text(stringResource(R.string.dictionary_close))
 				}
 			}
 		)

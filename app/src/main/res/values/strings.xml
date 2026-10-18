@@ -103,16 +103,13 @@
 
 	<!-- Background and stability -->
 	<string name="stability_label">Background and stability</string>
-	<string name="stability_intro">If speech cuts out or the engine seems to crash, the phone may be stopping evvdroid in the background to save battery. Turn each of these off for evvdroid.</string>
+	<string name="stability_intro">If speech cuts out or the engine seems to crash, the phone may be stopping evvdroid in the background to save battery. Turn battery optimisation and app hibernation off for evvdroid, allow it to auto start, and lock it in recent apps.</string>
 	<string name="stability_battery">Battery optimisation</string>
 	<string name="stability_hibernation">App hibernation</string>
 	<string name="stability_autostart">Allow auto start</string>
 	<string name="stability_autostart_missing">This phone has no auto start screen evvdroid knows of. App info is open instead: look for auto start, background activity or battery there.</string>
 	<string name="stability_pinning">Lock in recent apps</string>
 	<string name="stability_pinning_help">Some phones close apps when recent apps are cleared. To keep evvdroid open: open evvdroid, then open recent apps. Long press evvdroid\'s card, or open its menu, and choose Lock, Pin or Keep open. The name differs from phone to phone, and stock Android has no such option.</string>
-	<string name="stability_on">On</string>
-	<string name="stability_off">Off</string>
-	<string name="close">Close</string>
 	<string name="stability_exits_label">Why evvdroid stopped</string>
 	<string name="stability_exits_since">Since %1$s:</string>
 	<string name="stability_exits_killed">Closed by the phone while in use: %1$d</string>
